@@ -2,11 +2,9 @@
 # Licensed under the MIT license.
 
 import argparse
-from collections import OrderedDict
 import importlib
 import json
 import os
-import shutil
 import sys
 import time
 
@@ -15,27 +13,27 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
+import torchvision
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 sys.path.append("..")
-import runtime
+import runtimes
 import sgd
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('--data_dir', type=str,
-                    help='path to dataset')
+# parser.add_argument('--data_dir', type=str,
+#                     help='path to dataset')
 parser.add_argument('--distributed_backend', type=str,
                     help='distributed backend to use (gloo|nccl)')
 parser.add_argument('--module', '-m', required=True,
                     help='name of module that contains model and tensor_shapes definition')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=90, type=int, metavar='N',
+parser.add_argument('--epochs', default=5, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -105,7 +103,7 @@ def is_last_stage():
 
 # Synthetic Dataset class.
 class SyntheticDataset(torch.utils.data.dataset.Dataset):
-    def __init__(self, input_size, length, num_classes=1000):
+    def __init__(self, input_size, length, num_classes=10):
         self.tensor = Variable(torch.rand(*input_size)).type(torch.FloatTensor)
         self.target = torch.Tensor(1).random_(0, num_classes)[0].type(torch.LongTensor)
         self.length = length
@@ -134,10 +132,10 @@ def main():
     if args.arch == 'inception_v3':
         input_size = [args.batch_size, 3, 299, 299]
     else:
-        input_size = [args.batch_size, 3, 224, 224]
+        input_size = [args.batch_size, 3, 32, 32]
     training_tensor_shapes = {"input0": input_size, "target": [args.batch_size]}
     dtypes = {"input0": torch.int64, "target": torch.int64}
-    inputs_module_destinations = {"input": 0}
+    inputs_module_destinations = {"input0": 0}
     target_tensor_names = {"target"}
     for (stage, inputs, outputs) in model[:-1]:  # Skip last layer (loss).
         input_tensors = []
@@ -174,7 +172,7 @@ def main():
             int(k): v for (k, v) in configuration_maps['stage_to_rank_map'].items()}
         configuration_maps['stage_to_depth_map'] = json_config_file.get("stage_to_depth_map", None)
 
-    r = runtime.StageRuntime(
+    r = runtimes.StageRuntime(
         model=model, distributed_backend=args.distributed_backend,
         fp16=args.fp16, loss_scale=args.loss_scale,
         training_tensor_shapes=training_tensor_shapes,
@@ -187,7 +185,7 @@ def main():
         local_rank=args.local_rank,
         num_ranks_in_server=args.num_ranks_in_server,
         verbose_freq=args.verbose_frequency,
-        model_type=runtime.IMAGE_CLASSIFICATION,
+        model_type=runtimes.IMAGE_CLASSIFICATION,
         enable_recompute=args.recompute)
 
     # stage needed to determine if current stage is the first stage
@@ -237,43 +235,64 @@ def main():
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
     if args.arch == 'inception_v3':
         if args.synthetic_data:
             train_dataset = SyntheticDataset((3, 299, 299), 10000)
         else:
-            traindir = os.path.join(args.data_dir, 'train')
-            train_dataset = datasets.ImageFolder(
-                traindir,
-                transforms.Compose([
-                    transforms.RandomResizedCrop(299),
-                    transforms.ToTensor(),
-                    normalize,
-                ])
-            )
+            train_dataset = torchvision.datasets.CIFAR10(
+                root='./data', train=True, download=True, transform=transform_train)
+
+            # traindir = os.path.join(args.data_dir, 'train')
+            # train_dataset = datasets.ImageFolder(
+            #     traindir,
+            #     transforms.Compose([
+            #         transforms.RandomResizedCrop(299),
+            #         transforms.ToTensor(),
+            #         normalize,
+            #     ])
+            # )
     else:
         if args.synthetic_data:
-            train_dataset = SyntheticDataset((3, 224, 224), 1000000)
+            train_dataset = SyntheticDataset((3, 299, 299), 10000)
         else:
-            traindir = os.path.join(args.data_dir, 'train')
-            train_dataset = datasets.ImageFolder(
-                traindir,
-                transforms.Compose([
-                    transforms.RandomResizedCrop(224),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                    normalize,
-                ]))
+            train_dataset = torchvision.datasets.CIFAR10(
+                root='./data', train=True, download=True, transform=transform_train)
+
+            # traindir = os.path.join(args.data_dir, 'train')
+            # train_dataset = datasets.ImageFolder(
+            #     traindir,
+            #     transforms.Compose([
+            #         transforms.RandomResizedCrop(224),
+            #         transforms.RandomHorizontalFlip(),
+            #         transforms.ToTensor(),
+            #         normalize,
+            #     ]))
 
     if args.synthetic_data:
-        val_dataset = SyntheticDataset((3, 224, 224), 10000)
+        val_dataset = SyntheticDataset((3, 229, 229), 1000)
     else:
-        valdir = os.path.join(args.data_dir, 'val')
-        val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ]))
+        val_dataset = torchvision.datasets.CIFAR10(
+            root='./data', train=True, download=True, transform=transform_test)
+
+        # valdir = os.path.join(args.data_dir, 'val')
+        # val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
+        #     transforms.Resize(256),
+        #     transforms.CenterCrop(224),
+        #     transforms.ToTensor(),
+        #     normalize,
+        # ]))
 
     distributed_sampler = False
     train_sampler = None
@@ -575,7 +594,7 @@ def accuracy(output, target, topk=(1,)):
 
         res = []
         for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 

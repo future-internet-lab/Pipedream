@@ -20,8 +20,8 @@ class Stage3(torch.nn.Module):
         self.layer13 = torch.nn.Conv2d(512, 2048, kernel_size=(1, 1), stride=(1, 1), bias=False)
         self.layer14 = torch.nn.BatchNorm2d(2048, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
         self.layer16 = torch.nn.ReLU(inplace=True)
-        self.layer17 = torch.nn.AvgPool2d(kernel_size=7, stride=1, padding=0)
-        self.layer20 = torch.nn.Linear(in_features=2048, out_features=1000, bias=True)
+        self.layer17 = torch.nn.AvgPool2d(kernel_size=1, stride=1, padding=0)
+        self.layer20 = torch.nn.Linear(in_features=2048, out_features=10, bias=True)
 
         self._initialize_weights()
 
